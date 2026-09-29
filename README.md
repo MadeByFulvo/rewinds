@@ -6,7 +6,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/rewinds?style=flat-square&logo=pypi&logoColor=white&color=4F46E5)](https://pypi.org/project/rewinds/)
 [![Python](https://img.shields.io/pypi/pyversions/rewinds?style=flat-square&logo=python&logoColor=white&color=3776AB)](https://pypi.org/project/rewinds/)
-[![License](https://img.shields.io/badge/license-MIT-4F46E5.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache_2.0-4F46E5.svg?style=flat-square)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-22c55e?style=flat-square)](pyproject.toml)
 
 [Installation](#installation) · [Usage](#usage) · [Commands](#commands) · [API Reference](#api-reference) · [Design](#design) · [Roadmap](#roadmap) · [FAQ](#faq)
@@ -272,6 +272,6 @@ repositories because it neither checks out nor updates the index.
 
 <div align="center">
 
-<sub>MIT licensed. Copyright &copy; 2026 MadeByFulvo.</sub>
+<sub>Licensed under the Apache License, Version 2.0. Copyright &copy; 2026 MadeByFulvo.</sub>
 
 </div>

@@ -6,4 +6,4 @@
 #   bisect.py    find the commit that changed a file's behavior
 #   cli.py       the rewinds command
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
