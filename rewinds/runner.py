@@ -59,6 +59,9 @@ def interpreter_for(path: Path) -> list[str] | None:
 #   dict iteration order can't change results between runs. And a
 #   timeout is always applied, because historical scripts sometimes
 #   hang and nobody enjoys killing zombie processes.
+#
+#   The interpreter argument lets a caller substitute a different one --
+#   venv.py uses this to run files inside an ephemeral environment.
 def run_file(
     extraction: Extraction,
     rel_path: str,
@@ -66,15 +69,16 @@ def run_file(
     cwd_subdir: str | None = None,
     env_extra: dict[str, str] | None = None,
     timeout: float | None = 120.0,
+    interpreter: list[str] | None = None,
 ) -> RunResult:
     target = extraction.target(rel_path)
-    interp = interpreter_for(target)
+    interp = interpreter if interpreter is not None else interpreter_for(target)
     if interp is None:
         raise NoInterpreterError(
             f"don't know how to run {target.name!r} "
             f"(supported: {', '.join(sorted(_INTERPRETERS))})"
         )
-    cmd = interp + [str(target)] + list(args or [])
+    cmd = list(interp) + [str(target)] + list(args or [])
 
     cwd = extraction.root
     if cwd_subdir:

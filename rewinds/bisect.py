@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .extract import extract_tree, resolve_ref, GitError
 from .runner import NoInterpreterError, RunResult, run_file
+from .venv import ensure_venv, VenvError
 
 
 # What happened when we ran the file at one particular commit.
@@ -20,6 +21,8 @@ class BisectStep:
     sha: str
     short: str  # short sha, for printing
     result: RunResult
+    venv_failed: bool = False  # env build failed; ran with system python
+    behavior_ok: bool = True  # false when exit code or --expect marked it bad
 
 
 # The whole story of a bisect run.
@@ -34,14 +37,19 @@ class BisectReport:
     steps: list[BisectStep]
 
     def render(self) -> str:
-        lines = [f"good: {self.good[:8]}  bad: {self.bad[:8]}"]
+        lines = [
+            f"**bisect** `{self.good[:8]}` .. `{self.bad[:8]}`",
+            "",
+        ]
         for s in self.steps:
-            status = "OK " if s.result.ok else "FAIL"
-            lines.append(f"  {s.short}  {status}")
+            status = "OK" if s.behavior_ok else "**FAIL**"
+            note = " *(venv failed; system python)*" if s.venv_failed else ""
+            lines.append(f"  `{s.short}`  {status}{note}")
+        lines.append("")
         if self.culprit:
-            lines.append(f"\nfirst bad commit: {self.culprit}")
+            lines.append(f"> **first bad commit:** `{self.culprit}`")
         else:
-            lines.append("\nno behavior change detected in this range")
+            lines.append("> no behavior change detected in this range")
         return "\n".join(lines)
 
 
@@ -71,6 +79,12 @@ def _commits_between(repo: Path, good_sha: str, bad_sha: str) -> list[str]:
 #
 # Files we don't know how to run are skipped instead of failing the
 # whole bisect. A missing interpreter says nothing about the commit.
+#
+# With use_venv (the default) every commit runs inside its own ephemeral
+# environment, built from that commit's dependency manifest -- pins may
+# legitimately change across the range, and each commit should be judged
+# in its own world. A venv build failure is not a behavior change, so we
+# fall back to the system interpreter and mark the step.
 def bisect(
     repo: Path,
     path: str,
@@ -78,6 +92,7 @@ def bisect(
     bad: str = "HEAD",
     args: list[str] | None = None,
     expect_output: str | None = None,
+    use_venv: bool = True,
 ) -> BisectReport:
     good_sha = resolve_ref(repo, good)
     bad_sha = resolve_ref(repo, bad)
@@ -91,17 +106,39 @@ def bisect(
     for sha in candidates:
         extraction = extract_tree(repo, sha)
         try:
-            result = run_file(extraction, path, args=args, timeout=60.0)
+            venv = None
+            venv_failed = False
+            if use_venv:
+                try:
+                    venv = ensure_venv(extraction)
+                except VenvError:
+                    # pip failing to build an old pin is environment
+                    # trouble, not the behavior we're hunting for.
+                    venv_failed = True
+            result = run_file(
+                extraction,
+                path,
+                args=args,
+                timeout=60.0,
+                interpreter=venv.interpreter() if venv else None,
+            )
         except NoInterpreterError:
             extraction.cleanup()
             continue
         finally:
             extraction.cleanup()
 
-        steps.append(BisectStep(sha=sha, short=sha[:8], result=result))
-
         behavior_bad = not result.ok or (
             expect_output is not None and expect_output not in result.stdout
+        )
+        steps.append(
+            BisectStep(
+                sha=sha,
+                short=sha[:8],
+                result=result,
+                venv_failed=venv_failed,
+                behavior_ok=not behavior_bad,
+            )
         )
         if behavior_bad:
             culprit = sha

@@ -1,3 +1,4 @@
+# python
 .venv/
 __pycache__/
 *.pyc
@@ -5,3 +6,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store

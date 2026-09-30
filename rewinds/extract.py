@@ -33,12 +33,43 @@ def _git(repo: Path, *args: str) -> str:
 # Take whatever the user typed and turn it into a sha git can work with.
 # Tags, branches, short shas, HEAD~3, all fine. The @ is optional and
 # just there to make refs easy to spot in the CLI.
+#
+# When git doesn't recognize the ref but it has the shape of a time
+# ref (2026-06-01, 2026-06, 2026, last-month, ...), it is resolved
+# through refs.py to "the newest commit at or before that instant".
+# Real git refs always win: a tag named 2026 is a tag first.
 def resolve_ref(repo: Path, ref: str) -> str:
     ref = ref.lstrip("@")
     try:
         return _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}").strip()
-    except GitError as e:
-        raise GitError(f"unknown ref {ref!r}: {e}") from e
+    except GitError:
+        pass
+
+    from .refs import DateRefError, looks_like_time_ref, resolve_time_ref
+
+    if looks_like_time_ref(ref):
+        try:
+            sha, warning = resolve_time_ref(repo, ref)
+        except DateRefError as e:
+            raise GitError(str(e)) from e
+        if warning:
+            # Surfaced as a warning attribute on the exception-free path:
+            # callers print it when they have a stderr to print to.
+            _LAST_TIME_WARNING.append(warning)
+        return sha
+
+    raise GitError(f"unknown ref {ref!r}")
+
+
+# Warnings produced by the most recent resolve_ref call. Consumed (and
+# cleared) by the CLI so time-ref fallbacks aren't silent.
+_LAST_TIME_WARNING: list[str] = []
+
+
+def pop_time_warning() -> str | None:
+    if _LAST_TIME_WARNING:
+        return _LAST_TIME_WARNING.pop()
+    return None
 
 
 # Simple existence check before we go digging through a whole tree.

@@ -68,17 +68,53 @@ package dependencies.
 
 ```bash
 rewinds run <file> <ref> [args...]
+rewinds run <file>                    # no ref? pick from recent versions
 ```
 
 `ref` accepts any commit-ish expression: a full or abbreviated sha, a tag, a
 branch name, or a relative expression such as `HEAD~40`. An optional leading
-`@` is accepted and stripped, so refs are easy to identify visually. An
-alternative argument form, `<ref>:<file>`, is also supported.
+`@` is accepted and stripped, so refs are easy to identify visually. Argument
+order is tolerant: `@HEAD~2:calc.py` and `@HEAD~2 calc.py` both work.
 
-The file is executed inside the extracted tree with the current interpreter.
-Standard output, standard error, and the exit code are passed through
-unchanged, so rewinds composes with pipes, compound commands, and CI systems
-in the same way as any direct invocation.
+Time-based refs resolve to "the newest commit at or before that instant":
+
+| Ref | Means |
+|-----|-------|
+| `@2026-06-01` | as it stood on June 1st, 2026 |
+| `@2026-06` | as it stood at the end of June 2026 |
+| `@2026` | as it stood at the end of 2026 |
+| `@last-month` | the end of the previous calendar month |
+| `@last-week` | seven days ago |
+| `@yesterday` | twenty-four hours ago |
+
+If every commit is newer than the requested time, the earliest commit is
+used with a printed warning — "the repo didn't exist yet" shouldn't be a
+dead end. Real git refs always win: a tag named `2026` is a tag first, a
+date second. Time refs work everywhere a ref does: `run`, `show`, and
+`bisect` (`rewinds bisect calc.py --good @2026-01-01 --bad HEAD`).
+
+When the ref is omitted, rewinds lists the recent versions of the file and
+asks which to run — pick a number, press Enter for the latest, or type any
+ref. In non-interactive environments (CI, pipes) it prints the same list
+with a hint instead of prompting, so automation never hangs.
+
+Omitting the `run` subcommand produces a focused hint:
+
+```
+> **error:** unknown command `calc.py`
+>
+> to run a file: `rewinds run calc.py <ref>`
+> example: `rewinds run calc.py @HEAD~1`
+```
+
+The file is executed inside the extracted tree. When the commit declares
+dependencies (a `requirements.txt` at that commit), rewinds builds an
+**ephemeral virtual environment** from it and runs the file with that
+environment's interpreter — historical code gets its historical packages.
+Otherwise the current interpreter is used. Standard output, standard error,
+and the exit code are passed through unchanged, so rewinds composes with
+pipes, compound commands, and CI systems in the same way as any direct
+invocation.
 
 Every run is time-limited. The default limit is 120 seconds and can be
 overridden per invocation.
@@ -100,6 +136,8 @@ through to the file.
 |------|-------------|
 | `--timeout <seconds>` | Execution time limit. Default 120. |
 | `--keep` | Retain the temporary extraction directory for inspection. |
+| `--no-venv` | Skip the ephemeral environment even if the commit declares dependencies. |
+| `--keep-going` | If ephemeral environment setup fails, fall back to the current interpreter. |
 | `--repo <path>` | Operate on the repository at the given path. Defaults to the current directory. |
 
 ### show
@@ -108,7 +146,17 @@ through to the file.
 rewinds show <file> <ref>
 ```
 
-Prints a historical file to standard output without executing it.
+Prints a historical file to standard output without executing it. The ref is
+optional; without one, the recent-versions picker is shown.
+
+### log
+
+```bash
+rewinds log <file> [-n <count>]
+```
+
+Lists the commits that touched a file, newest first — the same list the
+version picker shows. `-n` controls how many entries to display (default 10).
 
 ### bisect
 
@@ -128,8 +176,29 @@ Behavior is judged by two signals:
 | stdout stops containing `--expect` | The file runs but produces incorrect output |
 
 Files with an unsupported extension are skipped rather than treated as
-failures. The command exits `1` when a culprit is identified and `0`
-otherwise, which allows direct use in CI pipelines and shell scripts.
+failures. With ephemeral environments enabled (the default), each commit in
+the range runs inside its own environment built from that commit's declared
+dependencies — a commit whose pin bump changed behavior is found even when
+today's installed packages could never produce the old output. A failed
+environment build falls back to the current interpreter and is marked in
+the report rather than counted as a behavior change. The command exits `1`
+when a culprit is identified and `0` otherwise, which allows direct use in
+CI pipelines and shell scripts.
+
+### Output style
+
+Diagnostics use a small markdown dialect: bold labels, backticked refs and
+shas, and blockquotes for errors and guidance. It stays readable in a plain
+terminal and renders properly anywhere markdown is understood.
+
+```
+**history of `calc.py`**
+
+  `a7ca582`  2026-09-30  v3
+  `c280cfa`  2026-09-30  v2
+```
+
+All diagnostics go to stderr; the executed file's stdout stays pipe-clean.
 
 ---
 
@@ -143,8 +212,10 @@ All functionality available through the CLI is importable.
 | `extract_file(repo, ref, path)` | `rewinds.extract` | As `extract_tree`, after verifying the file exists at the ref. |
 | `resolve_ref(repo, ref)` | `rewinds.extract` | Resolve any accepted ref form to a full sha. |
 | `Extraction` | `rewinds.extract` | Handle for an extracted commit. `.target(path)` locates a file; `.cleanup()` removes the directory. |
-| `run_file(extraction, path, ...)` | `rewinds.runner` | Execute a file within the extraction. Returns a `RunResult`. |
+| `run_file(extraction, path, ...)` | `rewinds.runner` | Execute a file within the extraction. Returns a `RunResult`. Pass `interpreter=[...]` to substitute an environment. |
 | `RunResult` | `rewinds.runner` | `exit_code`, `stdout`, `stderr`, and an `ok` property. |
+| `ensure_venv(extraction)` | `rewinds.venv` | Build an ephemeral environment from the commit's dependency manifest, or return `None` if it declares none. |
+| `EphemeralVenv` | `rewinds.venv` | Built environment handle; `.interpreter()` substitutes into `run_file`. Dies with `extraction.cleanup()`. |
 | `bisect(repo, path, good, ...)` | `rewinds.bisect` | Behavior bisect across a commit range. Returns a `BisectReport`. |
 | `BisectReport` | `rewinds.bisect` | `culprit` and per-commit `steps`, with a `render()` summary. |
 
@@ -181,6 +252,7 @@ The architecture consists of four modules:
 |--------|----------------|
 | `rewinds/extract.py` | Ref resolution and extraction. Enforces the read-only guarantee. |
 | `rewinds/runner.py` | Subprocess execution, interpreter mapping, reproducibility controls. |
+| `rewinds/venv.py` | Ephemeral environments from historical dependency manifests. |
 | `rewinds/bisect.py` | Commit-range traversal and behavior comparison. |
 | `rewinds/cli.py` | Argument parsing, output streaming, exit codes. |
 
@@ -192,7 +264,15 @@ directory outside it. No checkout, reset, or index operation is ever run.
 
 **In-context execution.** The file runs inside the extracted tree. Relative
 paths, sibling imports, and configuration files resolve as they did at the
-source commit.
+source commit. When the commit declares dependencies, they are installed
+into a throwaway environment inside the same temporary directory — nothing
+is ever installed into the host, user site-packages, or any other project.
+
+**Ephemeral environments in v0.2.0 have known limits.** Package
+installation requires network access. Unpinned requirements resolve to
+current versions, not historical ones. Building old source distributions
+can fail on modern interpreters; such failures fall back to the current
+interpreter (with `--keep-going`) or abort with pip's output attached.
 
 **Reproducibility.** `PYTHONPATH` is removed from the child environment so
 packages installed on the host cannot leak into a historical run. The hash
@@ -207,7 +287,7 @@ times.
 
 | Extension | Runner |
 |:---------:|--------|
-| `.py` | Current Python interpreter |
+| `.py` | Ephemeral environment when the commit declares dependencies, otherwise the current Python interpreter |
 | `.sh` | `sh` |
 | `.bash` | `bash` |
 
@@ -218,9 +298,9 @@ require one line each.
 
 ## Roadmap
 
-- [ ] Ephemeral virtual environments built from each commit's
+- [x] Ephemeral virtual environments built from each commit's
       `requirements.txt`, so historical code runs against historical
-      dependencies
+      dependencies *(v0.2.0)*
 - [ ] Lazy extraction of the import closure rather than the full tree
 - [ ] Output-file comparison in bisect
 - [ ] Additional interpreters

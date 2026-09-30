@@ -28,8 +28,10 @@ system.
 
 | Path | Responsibility |
 |------|----------------|
-| `rewinds/extract.py` | Ref resolution and extraction. Enforces the read-only guarantee. |
+| `rewinds/extract.py` | Ref resolution (including time refs) and extraction. Enforces the read-only guarantee. |
+| `rewinds/refs.py` | Time-based refs: `@2026-06-01`, `@last-month`, and friends. |
 | `rewinds/runner.py` | Subprocess execution and reproducibility controls. |
+| `rewinds/venv.py` | Ephemeral environments from historical dependency manifests. |
 | `rewinds/bisect.py` | Commit-range traversal and behavior comparison. |
 | `rewinds/cli.py` | Argument parsing, output streaming, exit codes. |
 
